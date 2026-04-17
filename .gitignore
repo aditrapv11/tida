@@ -1,0 +1,3 @@
+spotify_auth.py
+*.pyc
+__pycache__/
