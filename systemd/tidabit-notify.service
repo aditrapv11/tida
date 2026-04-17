@@ -1,0 +1,12 @@
+[Unit]
+Description=Tidabit Claude Notification Server
+After=network.target
+
+[Service]
+User=tidabit1977
+WorkingDirectory=/home/tidabit1977
+ExecStart=/usr/bin/python3 /home/tidabit1977/notification_server.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
