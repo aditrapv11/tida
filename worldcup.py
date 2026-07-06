@@ -32,8 +32,13 @@ FONT = ImageFont.load_default(size=8)
 # unless the API marks it finished sooner. Bounds how long a stuck game (API
 # never flips `finished`) can stay glued to the live view.
 LIVE_WINDOW = timedelta(hours=3)
-LIVE_POLL_SECS = 15
+LIVE_POLL_SECS = 5
 IDLE_POLL_SECS = 300
+
+# While a live game is showing, every PREVIEW_INTERVAL_SECS interrupt it to
+# flash the next two upcoming games for PREVIEW_DURATION_SECS each.
+PREVIEW_INTERVAL_SECS = 180
+PREVIEW_DURATION_SECS = 15
 
 # Colors
 GREEN  = (0, 180, 70)
@@ -177,7 +182,7 @@ canvas = matrix.CreateFrameCanvas()
 
 # ── State ─────────────────────────────────────────────────────────────────────
 
-state = {'next_game': None, 'live_game': None, 'last_game': None}
+state = {'next_game': None, 'next_games': [], 'live_game': None, 'last_game': None}
 lock = threading.Lock()
 
 # ── API ───────────────────────────────────────────────────────────────────────
@@ -227,9 +232,10 @@ def refresh():
     past.sort(key=lambda x: x[0], reverse=True)
 
     with lock:
-        state['next_game'] = upcoming[0][1] if upcoming else None
-        state['live_game'] = live[0][1] if live else None
-        state['last_game'] = past[0][1] if past else None
+        state['next_game']  = upcoming[0][1] if upcoming else None
+        state['next_games'] = [g for _, g in upcoming[:2]]
+        state['live_game']  = live[0][1] if live else None
+        state['last_game']  = past[0][1] if past else None
 
 
 def poll_loop():
@@ -291,10 +297,10 @@ def get_flag(country_name: str) -> Image.Image:
 
 def preload_flags():
     with lock:
-        ng = state.get('next_game')
-        vg = state.get('live_game')
-        lg = state.get('last_game')
-    for g in [ng, vg, lg]:
+        ngs = state.get('next_games', [])
+        vg  = state.get('live_game')
+        lg  = state.get('last_game')
+    for g in ngs + [vg, lg]:
         if g:
             get_flag(g.get('home_team_name_en', ''))
             get_flag(g.get('away_team_name_en', ''))
@@ -490,14 +496,39 @@ def draw_no_game_frame() -> Image.Image:
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
+preview_active   = False
+preview_idx      = 0
+preview_deadline = 0.0
+next_preview_at  = time.time() + PREVIEW_INTERVAL_SECS
+
 while True:
     check_and_show_notification(matrix, canvas)
 
     with lock:
-        vg = state.get('live_game')
-        ng = state.get('next_game')
+        vg  = state.get('live_game')
+        ng  = state.get('next_game')
+        ngs = state.get('next_games', [])
 
-    if vg:
+    now_t = time.time()
+
+    if vg and ngs:
+        if not preview_active and now_t >= next_preview_at:
+            preview_active   = True
+            preview_idx      = 0
+            preview_deadline = now_t + PREVIEW_DURATION_SECS
+        elif preview_active and now_t >= preview_deadline:
+            preview_idx += 1
+            if preview_idx >= len(ngs):
+                preview_active  = False
+                next_preview_at = now_t + PREVIEW_INTERVAL_SECS
+            else:
+                preview_deadline = now_t + PREVIEW_DURATION_SECS
+    else:
+        preview_active = False
+
+    if preview_active:
+        img = draw_game_frame(ngs[preview_idx])
+    elif vg:
         img = draw_live_frame(vg)
     elif ng:
         img = draw_game_frame(ng)
