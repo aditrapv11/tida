@@ -6,7 +6,7 @@ import math
 import time
 import threading
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from io import BytesIO
@@ -27,6 +27,13 @@ FLAG_DIR.mkdir(exist_ok=True)
 PANEL_W, PANEL_H = 64, 32
 FLAG_W, FLAG_H = 18, 12
 FONT = ImageFont.load_default(size=8)
+
+# A match is considered "live" from kickoff until this much time has passed,
+# unless the API marks it finished sooner. Bounds how long a stuck game (API
+# never flips `finished`) can stay glued to the live view.
+LIVE_WINDOW = timedelta(hours=3)
+LIVE_POLL_SECS = 15
+IDLE_POLL_SECS = 300
 
 # Colors
 GREEN  = (0, 180, 70)
@@ -170,7 +177,7 @@ canvas = matrix.CreateFrameCanvas()
 
 # ── State ─────────────────────────────────────────────────────────────────────
 
-state = {'next_game': None, 'last_game': None}
+state = {'next_game': None, 'live_game': None, 'last_game': None}
 lock = threading.Lock()
 
 # ── API ───────────────────────────────────────────────────────────────────────
@@ -197,30 +204,40 @@ def refresh():
         return
 
     now = datetime.now(tz=timezone.utc)
-    upcoming, past = [], []
+    upcoming, live, past = [], [], []
     for g in games:
         if not g.get('home_team_name_en') or not g.get('away_team_name_en'):
             continue
         dt = parse_game_dt(g)
         if dt is None:
             continue
-        if g.get('finished') == 'TRUE' or dt <= now:
+        if g.get('finished') == 'TRUE':
             past.append((dt, g))
-        else:
+        elif dt <= now < dt + LIVE_WINDOW:
+            live.append((dt, g))
+        elif dt > now:
             upcoming.append((dt, g))
+        else:
+            # Kickoff was more than LIVE_WINDOW ago and API never marked it
+            # finished — treat as stale rather than stuck live forever.
+            past.append((dt, g))
 
     upcoming.sort(key=lambda x: x[0])
+    live.sort(key=lambda x: x[0])
     past.sort(key=lambda x: x[0], reverse=True)
 
     with lock:
         state['next_game'] = upcoming[0][1] if upcoming else None
+        state['live_game'] = live[0][1] if live else None
         state['last_game'] = past[0][1] if past else None
 
 
 def poll_loop():
     while True:
         refresh()
-        time.sleep(300)
+        with lock:
+            is_live = state.get('live_game') is not None
+        time.sleep(LIVE_POLL_SECS if is_live else IDLE_POLL_SECS)
 
 
 threading.Thread(target=poll_loop, daemon=True).start()
@@ -275,8 +292,9 @@ def get_flag(country_name: str) -> Image.Image:
 def preload_flags():
     with lock:
         ng = state.get('next_game')
+        vg = state.get('live_game')
         lg = state.get('last_game')
-    for g in [ng, lg]:
+    for g in [ng, vg, lg]:
         if g:
             get_flag(g.get('home_team_name_en', ''))
             get_flag(g.get('away_team_name_en', ''))
@@ -298,27 +316,21 @@ def fifa_code(name: str) -> str:
     return COUNTRY_TO_FIFA.get(name, name[:3].upper())
 
 
-def draw_game_frame(game: dict) -> Image.Image:
-    img  = Image.new('RGB', (PANEL_W, PANEL_H), BLACK)
-    draw = ImageDraw.Draw(img)
-
-    home  = game.get('home_team_name_en', '???')
-    away  = game.get('away_team_name_en', '???')
+def _draw_header(img: Image.Image, draw: ImageDraw.ImageDraw, home: str, away: str,
+                  wave_rgb: tuple) -> None:
+    """Pulsing top bar + FIFA code row + flags + 'vs' — shared by the
+    upcoming-match and live-match frames; only the bottom row differs."""
     code1 = fifa_code(home)
     code2 = fifa_code(away)
-    sid   = str(game.get('stadium_id', '9'))
-    city  = STADIUM_CITY.get(sid, '?')
-    dt    = parse_game_dt(game)
-    dt_et = dt.astimezone(ET) if dt else None
 
-    # ── Top bar (green wave, radiating from center outward) ────────────────────────────────────────────
+    # ── Top bar (color wave, radiating from center outward) ────────────────
     t_bar = time.time()
     cx_bar = (PANEL_W - 1) / 2.0
     for bx in range(PANEL_W):
         d = abs(bx - cx_bar)
         wave = 0.5 + 0.5 * math.sin(d * 0.30 - t_bar * 2.6)
         b = 0.18 + 0.82 * wave
-        col = (int(GREEN[0] * b), int(GREEN[1] * b), int(GREEN[2] * b))
+        col = (int(wave_rgb[0] * b), int(wave_rgb[1] * b), int(wave_rgb[2] * b))
         draw.line([(bx, 0), (bx, 1)], fill=col)
 
     # ── Codes row (centered, no flags on this line) ───────────────────────────
@@ -354,6 +366,45 @@ def draw_game_frame(game: dict) -> Image.Image:
     vs_y = fy + (FLAG_H - vh) // 2 - bb_v[1]
     draw.text((vs_x, vs_y), 'vs', fill=WHITE, font=FONT)
 
+
+def _score_int(v) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
+def draw_live_frame(game: dict) -> Image.Image:
+    img  = Image.new('RGB', (PANEL_W, PANEL_H), BLACK)
+    draw = ImageDraw.Draw(img)
+
+    home = game.get('home_team_name_en', '???')
+    away = game.get('away_team_name_en', '???')
+    _draw_header(img, draw, home, away, (210, 30, 30))
+
+    # ── Goal count, replacing the scrolling time/date/city marquee ─────────
+    s1, s2 = _score_int(game.get('home_score')), _score_int(game.get('away_score'))
+    score_str = f'{s1} - {s2}'
+    bb_s = draw.textbbox((0, 0), score_str, font=FONT)
+    sw   = bb_s[2] - bb_s[0]
+    sx   = max(0, (PANEL_W - sw) // 2)
+    draw.text((sx, 24), score_str, fill=GOLD, font=FONT)
+
+    return img
+
+
+def draw_game_frame(game: dict) -> Image.Image:
+    img  = Image.new('RGB', (PANEL_W, PANEL_H), BLACK)
+    draw = ImageDraw.Draw(img)
+
+    home  = game.get('home_team_name_en', '???')
+    away  = game.get('away_team_name_en', '???')
+    sid   = str(game.get('stadium_id', '9'))
+    city  = STADIUM_CITY.get(sid, '?')
+    dt    = parse_game_dt(game)
+    dt_et = dt.astimezone(ET) if dt else None
+
+    _draw_header(img, draw, home, away, GREEN)
 
     # ── Bottom marquee: time (gold) / date (yellow) / city (gray)
     time_str  = dt_et.strftime('%-I:%M%p').lower() if dt_et else '—'
@@ -443,9 +494,15 @@ while True:
     check_and_show_notification(matrix, canvas)
 
     with lock:
+        vg = state.get('live_game')
         ng = state.get('next_game')
 
-    img    = draw_game_frame(ng) if ng else draw_no_game_frame()
+    if vg:
+        img = draw_live_frame(vg)
+    elif ng:
+        img = draw_game_frame(ng)
+    else:
+        img = draw_no_game_frame()
     canvas.SetImage(img)
     canvas = matrix.SwapOnVSync(canvas)
     time.sleep(0.04)
