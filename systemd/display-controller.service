@@ -3,6 +3,7 @@ Description=Tidabit Display Controller
 After=network.target
 
 [Service]
+EnvironmentFile=/etc/tidabit-alexa.env
 ExecStart=/usr/bin/python3 /home/tidabit1977/controller.py
 Restart=always
 User=root

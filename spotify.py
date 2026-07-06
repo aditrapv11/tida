@@ -254,6 +254,21 @@ def _draw_px_text(img, x, y, text, color):
         cx += CHAR_W + CHAR_GAP
 
 
+def _draw_scaled_glyph(img, ch, x, y, scale, color):
+    iw, ih = img.size
+    rows = _G.get(ch)
+    if rows is None:
+        return
+    for row_i, bits in enumerate(rows):
+        for col_i in range(CHAR_W):
+            if bits & (1 << (CHAR_W - 1 - col_i)):
+                for dy in range(scale):
+                    for dx in range(scale):
+                        px, py = x + col_i * scale + dx, y + row_i * scale + dy
+                        if 0 <= px < iw and 0 <= py < ih:
+                            img.putpixel((px, py), color)
+
+
 # ── Token management ──────────────────────────────────────────────────────────
 
 def _load_tokens():
@@ -412,38 +427,44 @@ def make_frame_v2(state, scroll_x):
     # Album art — 26x26, 2px from left edge, vertically centered
     if state["art_small"]:
         img.paste(state["art_small"], (ART_X_V2, ART_Y_V2))
-    else:
+    elif state["title"]:
         d.rectangle([ART_X_V2, ART_Y_V2, ART_X_V2 + ART_SIZE_V2 - 1, ART_Y_V2 + ART_SIZE_V2 - 1], fill=(25, 25, 25))
 
     if not state["title"]:
-        _draw_px_text(img, TEXT_X_V2, 13, 'no music', (50, 50, 50))
+        qx = ART_X_V2 + (ART_SIZE_V2 - CHAR_W * 4) // 2
+        qy = ART_Y_V2 + (ART_SIZE_V2 - CHAR_H * 4) // 2
+        _draw_scaled_glyph(img, '?', qx, qy, 4, (110, 110, 110))
+        zero_w  = _str_width("Zero")
+        vibes_w = _str_width("vibes.")
+        _draw_px_text(img, TEXT_X_V2 + (TEXT_W_V2 - zero_w)  // 2, 10, "Zero",   (140, 140, 140))
+        _draw_px_text(img, TEXT_X_V2 + (TEXT_W_V2 - vibes_w) // 2, 17, "vibes.", (140, 140, 140))
         return img
 
     # Title — crop from pre-rendered strip (no putpixel per frame)
     strip = state.get("_title_strip")
     if strip:
         ox = int(scroll_x) % state["_title_strip_total"]
-        img.paste(strip.crop((ox, 0, ox + TEXT_W_V2, CHAR_H)), (TEXT_X_V2, 1))
+        img.paste(strip.crop((ox, 0, ox + TEXT_W_V2, CHAR_H)), (TEXT_X_V2, 2))
     else:
-        _draw_px_text(img, TEXT_X_V2, 1, state["title"], (255, 255, 255))
+        _draw_px_text(img, TEXT_X_V2, 2, state["title"], (255, 255, 255))
 
     # Artist — paste pre-rendered image
     if state.get("_artist_img"):
-        img.paste(state["_artist_img"], (TEXT_X_V2, 9))
+        img.paste(state["_artist_img"], (TEXT_X_V2, 10))
 
-    # Progress bar (y:18-19)
+    # Progress bar (y:19-20)
     elapsed = state["progress_ms"] + (time.time() - state["fetched_at"]) * 1000
     elapsed = min(elapsed, state["duration_ms"])
     frac = elapsed / state["duration_ms"] if state["duration_ms"] else 0
     bar_w = int(frac * TEXT_W_V2)
-    d.rectangle([TEXT_X_V2, 18, TEXT_X_V2 + TEXT_W_V2 - 1, 19], fill=(50, 50, 50))
+    d.rectangle([TEXT_X_V2, 19, TEXT_X_V2 + TEXT_W_V2 - 1, 20], fill=(50, 50, 50))
     if bar_w > 0:
-        d.rectangle([TEXT_X_V2, 18, TEXT_X_V2 + bar_w - 1, 19], fill=(30, 215, 96))
+        d.rectangle([TEXT_X_V2, 19, TEXT_X_V2 + bar_w - 1, 20], fill=(30, 215, 96))
 
     # Elapsed time — right-aligned
     time_str = _fmt_ms(elapsed)
     tw2 = _str_width(time_str)
-    _draw_px_text(img, TEXT_X_V2 + TEXT_W_V2 - tw2, 23, time_str, (100, 100, 100))
+    _draw_px_text(img, TEXT_X_V2 + TEXT_W_V2 - tw2, 24, time_str, (100, 100, 100))
 
     return img
 

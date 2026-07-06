@@ -13,7 +13,7 @@ import random
 from PIL import Image, ImageDraw
 
 NOTIFY_FLAG      = "/tmp/claude_notify"
-NOTIFY_DURATION  = 3.0   # seconds to show
+NOTIFY_DURATION  = 5.0   # seconds to show
 NOTIFY_FRESHNESS = 8.0   # only trigger if flag written within this many seconds
 NOTIFY_COOLDOWN  = 10.0  # minimum gap between notifications
 

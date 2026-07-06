@@ -1,0 +1,45 @@
+{
+  "brightness": 80,
+  "cycle": [
+    {
+      "key": "spotify",
+      "active": true,
+      "duration": 30
+    },
+    {
+      "key": "earth",
+      "active": false,
+      "duration": 60
+    },
+    {
+      "key": "weather",
+      "active": false,
+      "duration": 30
+    },
+    {
+      "key": "mbta",
+      "active": false,
+      "duration": 30
+    },
+    {
+      "key": "formlabs",
+      "active": false,
+      "duration": 30
+    },
+    {
+      "key": "maya",
+      "active": false,
+      "duration": 90
+    },
+    {
+      "key": "sentry",
+      "active": false,
+      "duration": 90
+    },
+    {
+      "key": "worldcup",
+      "active": true,
+      "duration": 30
+    }
+  ]
+}
